@@ -3,7 +3,7 @@
 #define PULLUP_A      3  // 10k pullup resistor switch drive port pin on channel 1 (0=ON, 1=OFF)
 #define PULLUP_B      4  // 10k pullup resistor switch drive port pin on channel 2 (0=ON, 1=OFF)
 #define PULLUP_C      5  // 10k pullup resistor switch drive port pin on channel 3 (0=ON, 1=OFF)
-#define PULLDOWN_C    6  // 3k3 pulldown resistor switch drive port pin on channel 3 (0=OFF, 1=ON)
+#define PULLDOWN_C    6  // 10k pulldown resistor switch drive port pin on channel 3 (0=OFF, 1=ON)
 
 #define INPUT_A       3  // ADC multiplexer setting for channel 1
 #define INPUT_B       4  // ADC multiplexer setting for channel 2
@@ -15,11 +15,13 @@ uint8_t channelArray[3] = { INPUT_A, INPUT_B, INPUT_C }; // channel sequencer ar
 uint8_t currentChannel;    // variable used as index of channel sequencer
 uint8_t averagingCode;     // code for averaging used by the host: 0,1,2,3 means 1,4,8,16 averages
 uint8_t numberOfAverages;
+uint8_t decimation; 
 
 // these variables are used both by the ADC interrupt routine and by the main code
 volatile uint16_t adcData;           // used to send data from the ADC interrupt routine
 volatile uint16_t adcTemporaryData;  // accumulates ADC samples
 volatile uint8_t  averagingIndex;    // used to count averaged samples
+volatile uint8_t decimationIndex;    // used to count decimated samples
 volatile boolean  adcDataAvailable;  // set by the ISR if ADC data is available
 
 uint16_t samplingFrequency;          // value of the desired sampling frequency
@@ -42,6 +44,7 @@ void setup()
   Serial.begin(250000);
   samplingFrequency = 3 * 50; // default value, 3 channels, 50Hz per channel
   averagingCode = 0;
+  decimation = 1;
   timerTicksBetweenSamples = calculateTimerTicksBetweenSamples(samplingFrequency);
   for (uint8_t c = 0; c < 3; c++)  // flash the on-board LED three times to indicate booting
   {
@@ -90,6 +93,14 @@ void loop()
     if (samplingFrequency < 32) samplingFrequency = 32;
     if (samplingFrequency > 3000) samplingFrequency = 3000;
     timerTicksBetweenSamples = calculateTimerTicksBetweenSamples(samplingFrequency);
+  }
+  else if (c == 'd')     // set decimation
+  {
+    decimation = serialReadByteWithEcho();
+  }
+  else if (c == 'D')     // get decimation
+  {
+    serialSendByte(decimation);
   }
   else if (c == 'Q')    // query parameters
   {
@@ -197,6 +208,7 @@ void startContinuousSampling(void)
   currentChannel = 0;
   adcDataAvailable = false;
   averagingIndex = numberOfAverages;
+  decimationIndex = 1;
   adcTemporaryData = 0;
 
   noInterrupts();
@@ -253,25 +265,29 @@ void startContinuousSampling(void)
 
 // A/D conversion complete ISR
 ISR(ADC_vect) {
-  TIFR1 &= bit(OCF1B); // clear timer1 compare B match flag
-  averagingIndex--;
-  if (averagingIndex == 0)
+  TIFR1 = bit(OCF1B); // clear timer1 compare B match flag
+  decimationIndex--;
+  if (decimationIndex == 0)
   {
-    currentChannel = (currentChannel + 1) % 3;
-    ADMUX = (channelArray[currentChannel]); // set the next analog input channel
-    adcTemporaryData += ADC;
-    adcData = adcTemporaryData << 2;  // emulate 12-bit ADC 
-    adcDataAvailable = true;
-    adcTemporaryData = 0;
-    averagingIndex = numberOfAverages;
-  }
-  else
-  {
-    adcTemporaryData += ADC;
+    averagingIndex--;
+    if (averagingIndex == 0)
+    {
+      currentChannel = (currentChannel + 1) % 3;
+      ADMUX = (channelArray[currentChannel]); // set the next analog input channel
+      adcTemporaryData += ADC;
+      adcData = adcTemporaryData << 2;  // emulate 12-bit ADC 
+      adcDataAvailable = true;
+      adcTemporaryData = 0;
+      averagingIndex = numberOfAverages;
+    }
+    else
+    {
+      adcTemporaryData += ADC;
+    }
+    decimationIndex = decimation;
   }
 }
 
 //Original sourcecode:
 //http://www.noise.inf.u-szeged.hu/edudev/EDAQ530/edaq530.c
-
 
